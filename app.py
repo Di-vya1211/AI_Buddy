@@ -241,7 +241,7 @@ for key, default in {
     "kahoot_finished": False,
     "kahoot_results": [],
     # NEW state keys
-    "page": "eli10",
+    "page": "home",
     "eli10_level": "ELI5 (Age 5–8)",
     "quiz_num_questions": 5,
     "quiz_difficulty": "Mixed",
@@ -260,14 +260,54 @@ for key, default in {
 
 
 # ---------------------------------------------------------------------------
-# JSON parse helpers (unchanged from original)
+# JSON parse helpers
 # ---------------------------------------------------------------------------
 
-def _parse_quiz_json(raw):
+def _clean_json(raw: str) -> str:
+    """Strip markdown code fences and stray prose from a model response.
+
+    Models sometimes wrap JSON in ```json ... ``` fences, or prefix it with
+    a sentence like "Here is your quiz:". This function:
+    1. Extracts the first ```...``` fenced block if present.
+    2. Otherwise finds the first '{' or '[' and last '}' or ']' and slices
+       out just that substring — discarding any surrounding prose.
+    """
+    import re
+    # Strip leading/trailing whitespace first
+    raw = raw.strip()
+
+    # Case 1: markdown code fence  ```json ... ```  or  ``` ... ```
+    fence = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
+    if fence:
+        return fence.group(1).strip()
+
+    # Case 2: find the outermost JSON object or array
+    start = -1
+    for i, ch in enumerate(raw):
+        if ch in ('{', '['):
+            start = i
+            break
+    if start != -1:
+        # Walk from end to find matching closing bracket
+        for i in range(len(raw) - 1, start - 1, -1):
+            if raw[i] in ('}', ']'):
+                return raw[start:i + 1]
+
+    # Fallback: return as-is and let json.loads raise the real error
+    return raw
+
+
+def _parse_json(raw: str) -> dict:
+    """Parse JSON from a model response, tolerating markdown fences."""
+    cleaned = _clean_json(raw)
     try:
-        data = json.loads(raw)
+        return json.loads(cleaned)
     except json.JSONDecodeError as exc:
         raise ValueError(f"The model returned invalid JSON: {exc}") from exc
+
+
+def _parse_quiz_json(raw):
+    data = _parse_json(raw)
     questions = data.get("questions")
     if not isinstance(questions, list) or len(questions) == 0:
         raise ValueError("Unexpected response shape — expected a JSON object with a \"questions\" list.")
@@ -283,10 +323,7 @@ def _parse_quiz_json(raw):
 
 
 def _parse_flashcard_json(raw):
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"The model returned invalid JSON: {exc}") from exc
+    data = _parse_json(raw)
     cards = data.get("cards")
     if not isinstance(cards, list) or len(cards) == 0:
         raise ValueError("Unexpected response shape — expected a \"cards\" list.")
@@ -298,10 +335,7 @@ def _parse_flashcard_json(raw):
 
 
 def _parse_concept_map_json(raw):
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"The model returned invalid JSON: {exc}") from exc
+    data = _parse_json(raw)
     if not isinstance(data.get("nodes"), list) or not isinstance(data.get("edges"), list):
         raise ValueError("Unexpected response shape — expected \"nodes\" and \"edges\" lists.")
     if len(data["nodes"]) == 0:
@@ -310,10 +344,7 @@ def _parse_concept_map_json(raw):
 
 
 def _parse_feynman_json(raw):
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"The model returned invalid JSON: {exc}") from exc
+    data = _parse_json(raw)
     if "understanding_score" not in data:
         raise ValueError("Unexpected response shape — missing \"understanding_score\".")
     try:
@@ -361,8 +392,9 @@ with st.sidebar:
             st.session_state["page"] = page_key
             st.rerun()
 
-    # Upload at top
-    nav_btn("⬆", "Upload", "Syllabus & notes", "upload", "#7a7f94")
+    # Home at very top
+    nav_btn("🏠", "Home",   "Welcome & overview", "home",   "#3b4ee8")
+    nav_btn("⬆", "Upload", "Syllabus & notes",   "upload", "#7a7f94")
     nav_btn("💡", "ELI10",   "Simplified learning", "eli10",   "#eab308")
     nav_btn("⚡", "Quiz",    "Kahoot-style game",   "quiz",    "#a855f7")
     nav_btn("📅", "Planner", "Revision schedule",   "planner", "#22c55e")
@@ -410,11 +442,75 @@ st.markdown(f"""
 
 
 # ---------------------------------------------------------------------------
-# PAGE: Upload
+# PAGE: Home — landing / welcome screen
 # ---------------------------------------------------------------------------
 current_page = st.session_state["page"]
 
-if current_page == "upload":
+if current_page == "home":
+    st.markdown("""
+    <div style="text-align:center;padding:48px 0 32px;">
+        <div style="background:#3b4ee8;width:72px;height:72px;border-radius:18px;
+             display:inline-flex;align-items:center;justify-content:center;
+             font-size:2rem;margin-bottom:18px;">📘</div>
+        <div style="font-size:2.2rem;font-weight:700;color:#fff;line-height:1.2;">
+            StudyBuddy <span style="color:#3b4ee8;">AI</span>
+        </div>
+        <div style="font-size:1rem;color:#7a7f94;margin-top:10px;max-width:520px;
+             display:inline-block;line-height:1.6;">
+            Your AI-powered study companion — upload notes, generate quizzes,
+            build revision plans, and ask anything about your documents.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Feature cards grid
+    features = [
+        ("⬆️", "Upload",       "upload",      "#1a1a2e",
+         "PDF, DOCX, PPTX, XLSX, images & more — index once, use everywhere."),
+        ("💡", "ELI10",        "eli10",       "#2a2410",
+         "Get crystal-clear explanations at ELI5, Beginner, or Intermediate level."),
+        ("⚡", "Quiz",         "quiz",        "#1e1430",
+         "Kahoot-style timed quiz or Classic mode — from your doc, a topic, or any text."),
+        ("📅", "Planner",      "planner",     "#0e2118",
+         "Day-by-day revision roadmap with concept sessions, quizzes & rest days."),
+        ("💬", "Ask AI",       "ask_ai",      "#0b1e20",
+         "RAG-powered chat — answers grounded in your uploaded document."),
+        ("🃏", "Flashcards",   "flashcards",  "#1a1208",
+         "AI-generated flip cards to drill key terms and definitions."),
+        ("🧠", "Feynman Mode", "feynman",     "#1e0a18",
+         "Explain a concept in your own words — AI scores your gaps."),
+        ("🕸", "Concept Map",  "concept_map", "#110a20",
+         "Interactive node graph from your notes or any topic you type."),
+    ]
+
+    cols = st.columns(4)
+    for i, (icon, title, page_key, bg, desc) in enumerate(features):
+        with cols[i % 4]:
+            st.markdown(
+                f"<div style='background:{bg};border:1px solid #1e2235;border-radius:12px;"
+                f"padding:20px 16px;margin-bottom:12px;min-height:140px;'>"
+                f"<div style='font-size:1.6rem;margin-bottom:8px;'>{icon}</div>"
+                f"<div style='font-weight:700;font-size:0.95rem;color:#e8eaf0;"
+                f"margin-bottom:6px;'>{title}</div>"
+                f"<div style='font-size:0.78rem;color:#7a7f94;line-height:1.5;'>{desc}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(f"Open {title}", key=f"home_card_{page_key}", use_container_width=True):
+                st.session_state["page"] = page_key
+                st.rerun()
+
+    st.markdown(
+        "<div style='text-align:center;margin-top:24px;font-size:0.8rem;color:#3a3f55;'>"
+        "👆 Click any feature to get started, or use the sidebar to navigate."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+# ---------------------------------------------------------------------------
+# PAGE: Upload
+# ---------------------------------------------------------------------------
+elif current_page == "upload":
     st.markdown("""
     <div class="page-header">
         <div class="page-icon" style="background:#1a1a2e;font-size:1.8rem;">⬆️</div>
@@ -627,8 +723,6 @@ elif current_page == "quiz":
             st.session_state[_k] = _v
 
     with st.container():
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-
         # ── Quiz Style ──────────────────────────────────────────────────────
         st.markdown("**Quiz Style**")
         style_opts = [("⚡ Kahoot (timed)", "kahoot"), ("📋 Classic (no timer)", "classic")]
@@ -764,38 +858,58 @@ elif current_page == "quiz":
 
             with st.spinner("Building your quiz..."):
                 try:
-                    weak_topics = db.get_recent_weak_topics(conn)
-                    last_pct = db.get_last_score_percentage(conn)
                     num_q = st.session_state["quiz_num_questions"]
                     difficulty = st.session_state["quiz_difficulty"]
                     time_limit = st.session_state["quiz_time"]
-
-                    adaptive_note = ""
-                    if weak_topics:
-                        adaptive_note += f" Emphasise these previously weak topics: {', '.join(weak_topics)}."
-                    if last_pct is not None:
-                        if last_pct >= 80:
-                            adaptive_note += " Make questions more challenging."
-                        elif last_pct < 50:
-                            adaptive_note += " Keep questions more fundamental."
 
                     diff_instruction = (
                         "" if difficulty == "Mixed"
                         else f" All questions should be {difficulty.lower()} difficulty."
                     )
 
-                    raw = ask(
-                        f"Generate exactly {num_q} multiple choice questions strictly based ONLY on the "
-                        f"content provided below. Do NOT use outside knowledge.{diff_instruction}"
-                        " Each wrong option should be a realistic misconception."
-                        + adaptive_note +
-                        ' Respond ONLY with JSON: {"questions": [{"question": "...",'
-                        ' "options": ["...","...","...","..."], "correct_index": 0,'
-                        ' "option_feedback": ["...","...","...","..."], "topic": "..."}]}.'
-                        " option_feedback: correct → affirmation; wrong → misconception explanation.\n\n"
-                        + source_line,
-                        json_mode=True,
-                    )
+                    # Only inject adaptive weak-topic note when quizzing from
+                    # a document — past quiz history is irrelevant for free topics.
+                    adaptive_note = ""
+                    if quiz_source == "document":
+                        weak_topics = db.get_recent_weak_topics(conn)
+                        last_pct = db.get_last_score_percentage(conn)
+                        if weak_topics:
+                            adaptive_note += f" Emphasise these previously weak topics: {', '.join(weak_topics)}."
+                        if last_pct is not None:
+                            if last_pct >= 80:
+                                adaptive_note += " Make questions more challenging."
+                            elif last_pct < 50:
+                                adaptive_note += " Keep questions more fundamental."
+
+                    # Build the prompt differently per source so the model
+                    # always has the content it needs.
+                    if quiz_source == "topic":
+                        prompt_text = (
+                            f"Generate exactly {num_q} multiple choice questions about the topic: "
+                            f'"{quiz_topic_val}".{diff_instruction}'
+                            " Each wrong option should be a common misconception a student might have."
+                            ' Respond ONLY with this exact JSON structure: {"questions": [{"question": "...",'
+                            ' "options": ["...","...","...","..."], "correct_index": 0,'
+                            ' "option_feedback": ["...","...","...","..."], "topic": "..."}]}.'
+                            " option_feedback: correct → short affirmation; wrong → explain the misconception."
+                        )
+                        # Do NOT use json_mode for topic — the prompt alone is enough
+                        # and json_mode on topic-only prompts causes API 400 errors.
+                        raw = ask(prompt_text, json_mode=False)
+                    else:
+                        prompt_text = (
+                            f"Generate exactly {num_q} multiple choice questions strictly based ONLY "
+                            f"on the content provided below. Do NOT use outside knowledge.{diff_instruction}"
+                            " Each wrong option should be a realistic misconception."
+                            + adaptive_note +
+                            ' Respond ONLY with JSON: {"questions": [{"question": "...",'
+                            ' "options": ["...","...","...","..."], "correct_index": 0,'
+                            ' "option_feedback": ["...","...","...","..."], "topic": "..."}]}.'
+                            " option_feedback: correct → affirmation; wrong → misconception explanation.\n\n"
+                            + source_line
+                        )
+                        raw = ask(prompt_text, json_mode=True)
+
                     questions = _parse_quiz_json(raw)
                     st.session_state["quiz"] = questions
                     st.session_state["quiz_answers"] = {}
@@ -811,8 +925,6 @@ elif current_page == "quiz":
                     st.session_state["active_quiz_style"] = st.session_state["quiz_style"]
                 except Exception as e:
                     st.error(f"Could not generate the quiz: {e}")
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Active quiz ──────────────────────────────────────────────────────────
     quiz = st.session_state["quiz"]
@@ -989,8 +1101,6 @@ elif current_page == "planner":
     """, unsafe_allow_html=True)
 
     with st.container():
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-
         st.markdown("📄 **Syllabus / Notes** *(paste raw text — topics extracted automatically)*")
         syllabus = st.text_area(
             "Syllabus text", label_visibility="collapsed",
@@ -1039,30 +1149,32 @@ elif current_page == "planner":
                 st.warning("Paste your syllabus, enter topics, or upload a document first.")
             else:
                 try:
-                    weak_db = db.get_recent_weak_topics(conn)
-                    all_weak = list({*([t.strip() for t in topics_weak.split(",") if t.strip()]), *weak_db})
+                    # Only use the weak topics the user explicitly typed in the
+                    # Weak Topics field — do NOT merge DB quiz history because
+                    # past quiz results (e.g. Newton's Laws) are unrelated to
+                    # the current plan's subject matter.
+                    user_weak = [t.strip() for t in topics_weak.split(",") if t.strip()]
                     focus_note = (
-                        f" Give extra revision time to these topics: {', '.join(all_weak)}."
-                        if all_weak else ""
+                        f" Prioritise and schedule these weak topics first and more often: {', '.join(user_weak)}."
+                        if user_weak else ""
                     )
                     hours_note = f" The student can study {study_hours:.1f} hours per day."
                     date_note = f" The exam is on {exam_date}." if exam_date else ""
                     topics_note = (
-                        f" Topics to cover: {topics_cover}." if topics_cover.strip() else ""
+                        f" Cover these specific topics: {topics_cover}." if topics_cover.strip() else ""
                     )
                     prompt = (
-                        "Create a focused day-by-day revision plan. Under each day list "
-                        "2-4 short actionable tasks. Include concept sessions, mini quizzes, "
-                        "buffer days, and rest days. Keep it concise."
+                        "Create a focused, realistic day-by-day revision plan strictly based "
+                        "on the syllabus or topics provided below. Do NOT introduce any topics "
+                        "not mentioned in the input. Under each day list 2-4 short actionable "
+                        "tasks. Include concept sessions, mini quizzes, buffer days, and rest days."
                         + focus_note + hours_note + date_note + topics_note
-                        + f"\n\nSyllabus / Notes:\n{source_material}"
+                        + f"\n\nSyllabus / Topics:\n{source_material}"
                     )
                     st.write_stream(ask_stream(prompt))
                     db.log_activity(conn, "plan")
                 except Exception as e:
                     st.error(str(e))
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1328,28 +1440,103 @@ elif current_page == "feynman":
 # PAGE: Concept map
 # ---------------------------------------------------------------------------
 elif current_page == "concept_map":
-    st.title("🕸 Concept Map")
-    st.caption("Interactive concept map — drag nodes to explore how ideas connect.")
+    st.markdown("""
+    <div class="page-header">
+        <div class="page-icon" style="background:#1a1030;">🕸</div>
+        <div>
+            <div class="page-title">Concept Map</div>
+            <div class="page-subtitle">Interactive node graph — drag nodes to explore how ideas connect.</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     notes_text = st.session_state.get("notes_text", "").strip()
-    if st.button("Generate concept map", key="map_btn"):
-        if not notes_text:
-            st.warning("Paste your notes first (Upload page).")
+    doc_name = st.session_state.get("last_uploaded_name", "")
+
+    # ── Source selector ─────────────────────────────────────────────────────
+    cm_source = st.session_state.get("cm_source", "topic" if not notes_text else "document")
+    if "cm_source" not in st.session_state:
+        st.session_state["cm_source"] = cm_source
+
+    has_doc = bool(notes_text)
+    src_opts = [("🔤 Enter a Topic", "topic"), ("📄 Uploaded Document", "document")]
+    s_cols = st.columns(len(src_opts))
+    for i, (label, val) in enumerate(src_opts):
+        with s_cols[i]:
+            active = st.session_state["cm_source"] == val
+            btn_lbl = label if not (val == "document" and not has_doc) else "📄 Upload doc first"
+            if st.button(btn_lbl, key=f"cm_src_{val}",
+                         type="primary" if active else "secondary",
+                         use_container_width=True):
+                st.session_state["cm_source"] = val
+                st.session_state["concept_map"] = None   # clear stale map
+                st.rerun()
+
+    cm_source = st.session_state["cm_source"]
+
+    # ── Conditional input ────────────────────────────────────────────────────
+    if cm_source == "topic":
+        if "cm_topic" not in st.session_state:
+            st.session_state["cm_topic"] = ""
+        cm_topic = st.text_input(
+            "Topic",
+            placeholder="e.g. Machine Learning, Photosynthesis, French Revolution...",
+            value=st.session_state["cm_topic"],
+        )
+        st.session_state["cm_topic"] = cm_topic
+    else:
+        cm_topic = ""
+        if has_doc:
+            st.markdown(
+                f"<div style='font-size:0.82rem;color:#22c55e;margin:4px 0 8px;'>"
+                f"✅ Using: <strong>{doc_name}</strong> ({len(notes_text):,} chars)</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            with st.spinner("Mapping the concepts..."):
-                try:
-                    raw = ask(
-                        "Extract key concepts and relationships from these notes. "
-                        'Respond ONLY with JSON: {"nodes": [{"id": 1, "label": "..."}], '
-                        '"edges": [{"from": 1, "to": 2, "label": "..."}]}. '
-                        "Include 6-12 nodes.\n\n"
-                        f"Notes:\n{notes_text}",
-                        json_mode=True,
+            st.warning("No document uploaded yet. Go to **Upload** page first, or choose 'Enter a Topic'.")
+
+    if st.button("🕸 Generate Concept Map", key="map_btn", type="primary", use_container_width=True):
+        if cm_source == "topic":
+            if not cm_topic.strip():
+                st.warning("Enter a topic first.")
+                st.stop()
+            source_content = None   # topic-based: no document text
+            source_label = cm_topic.strip()
+        else:
+            if not notes_text:
+                st.warning("No document uploaded. Go to Upload page first.")
+                st.stop()
+            source_content = notes_text
+            source_label = doc_name or "uploaded document"
+
+        with st.spinner(f"Mapping concepts for **{source_label}**…"):
+            try:
+                if source_content:
+                    # Document source — use json_mode, embed document text
+                    prompt = (
+                        f'Extract key concepts and their relationships from the content below. '
+                        f'Respond ONLY with JSON: {{"nodes": [{{"id": 1, "label": "..."}}], '
+                        f'"edges": [{{"from": 1, "to": 2, "label": "short relationship"}}]}}. '
+                        f"Include 8-14 nodes covering the most important ideas.\n\n"
+                        f"Content:\n{source_content}"
                     )
-                    data = _parse_concept_map_json(raw)
-                    st.session_state["concept_map"] = data
-                    db.log_activity(conn, "concept_map")
-                except Exception as e:
-                    st.error(f"Could not build the concept map: {e}")
+                    raw = ask(prompt, json_mode=True)
+                else:
+                    # Topic source — no json_mode (causes 400 on topic-only prompts)
+                    prompt = (
+                        f'Generate a concept map for the topic: "{source_label}". '
+                        f'Include the main concept, sub-concepts, and how they relate. '
+                        f'Respond ONLY with this exact JSON: {{"nodes": [{{"id": 1, "label": "..."}}], '
+                        f'"edges": [{{"from": 1, "to": 2, "label": "short relationship"}}]}}. '
+                        f"Include 8-14 nodes."
+                    )
+                    raw = ask(prompt, json_mode=False)
+
+                data = _parse_concept_map_json(raw)
+                st.session_state["concept_map"] = data
+                db.log_activity(conn, "concept_map")
+            except Exception as e:
+                st.error(f"Could not build the concept map: {e}")
 
     graph = st.session_state["concept_map"]
     if graph:

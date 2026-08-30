@@ -1,0 +1,5 @@
+.env
+study_buddy.db
+__pycache__/
+*.pyc
+.conda/

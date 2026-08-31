@@ -560,13 +560,10 @@ elif current_page == "upload":
                         if is_image:
                             st.warning(
                                 "⚠️ **No text could be read from this image.**\n\n"
-                                "Images are only useful if they contain printed/typed text "
-                                "(e.g. a photo of a textbook page). "
+                                "This image does not appear to contain any readable printed or typed text. "
+                                "Images are most useful when they are photos of textbook pages, notes, or slides with visible text. "
                                 "For diagrams or photos without text, upload a PDF or DOCX instead, "
-                                "or paste your notes in the text box below.\n\n"
-                                "_If you want OCR support, install "
-                                "[pytesseract](https://github.com/madmaze/pytesseract) + "
-                                "[Tesseract](https://github.com/tesseract-ocr/tesseract)._"
+                                "or paste your notes in the text box below."
                             )
                         else:
                             st.warning("No text could be extracted from this file. Try copy-pasting instead.")

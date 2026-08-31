@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 
@@ -197,6 +198,14 @@ def extract_text_from_file(uploaded_file):
 
     # ── PPTX / PPT ───────────────────────────────────────────────────────────
     if name.endswith(".pptx") or name.endswith(".ppt"):
+        # python-pptx can only open the modern .pptx (ZIP-based) format.
+        # Old binary .ppt files are not supported; give a clear message.
+        if name.endswith(".ppt") and not name.endswith(".pptx"):
+            raise ValueError(
+                "Old-format .ppt files are not supported. "
+                "Please save your presentation as .pptx (PowerPoint 2007 or later) "
+                "and upload again."
+            )
         try:
             from pptx import Presentation
             # Wrap in BytesIO — Streamlit's UploadedFile is not always
@@ -218,6 +227,11 @@ def extract_text_from_file(uploaded_file):
         except ImportError:
             raise ValueError(
                 "python-pptx is not installed. Run: pip install python-pptx"
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read the PowerPoint file: {exc}. "
+                "Make sure the file is a valid .pptx (not password-protected or corrupted)."
             )
 
     # ── XLSX / XLS ───────────────────────────────────────────────────────────
@@ -292,14 +306,18 @@ def _configure_tesseract():
 
 
 def _extract_text_from_image(uploaded_file):
-    """Extract text from an image using Tesseract OCR via pytesseract.
+    """Extract text from an image.
 
-    Automatically locates the Tesseract binary on Windows even when it is
-    not on the system PATH.  Returns extracted text, or empty string if
-    OCR is unavailable.
+    Strategy (in order):
+    1. Tesseract OCR via pytesseract — works locally when Tesseract is
+       installed (or on Streamlit Cloud if packages.txt includes tesseract-ocr).
+    2. Groq vision API — sends the image as a base64 data-URI to the model;
+       works on Streamlit Cloud without any system packages.
+    3. Returns empty string so the caller can show a friendly warning.
     """
     img_bytes = uploaded_file.read()
 
+    # ── 1. pytesseract OCR ────────────────────────────────────────────────────
     try:
         import pytesseract
         from PIL import Image
@@ -313,6 +331,51 @@ def _extract_text_from_image(uploaded_file):
         text = pytesseract.image_to_string(img)
         if text.strip():
             return text.strip()
+    except Exception:
+        pass
+
+    # ── 2. Groq vision API fallback ───────────────────────────────────────────
+    try:
+        client = get_client()
+        if client is not None:
+            # Detect MIME type from the file extension
+            ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+            mime_map = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "jfif": "image/jpeg",
+                "png": "image/png", "webp": "image/webp",
+                "gif": "image/gif", "bmp": "image/bmp",
+            }
+            mime = mime_map.get(ext, "image/jpeg")
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            data_uri = f"data:{mime};base64,{b64}"
+
+            response = client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Please extract and transcribe ALL text visible in this image. "
+                                    "Output only the extracted text, preserving the original "
+                                    "structure as closely as possible. If there is no text, "
+                                    "reply with exactly: NO_TEXT_FOUND"
+                                ),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_uri},
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=4096,
+            )
+            text = response.choices[0].message.content.strip()
+            if text and text != "NO_TEXT_FOUND":
+                return text
     except Exception:
         pass
 
